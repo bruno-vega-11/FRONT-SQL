@@ -1,11 +1,42 @@
 import { useState, useRef, useCallback } from "react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+interface ParsedPoint {
+  raw: string;
+  type: "POINT";
+  x: number;
+  y: number;
+}
+
+type ParsedCell = string | ParsedPoint;
+
+interface ParsedTable {
+  columns: string[];
+  rows: Record<string, ParsedCell>[];
+  total: number | null;
+  executionTimeNs: number | null;
+}
+
+interface ParsedResponse {
+  operation: string;
+  raw: string;
+  executionTimeNs: number | null;
+  total: number | null;
+  table: ParsedTable | null;
+  rtreeViz: RTreeVizResponse | null;
+}
+
 interface ParserResult {
+  query?: string;
+  ok?: boolean;
+  returncode?: number | null;
+  stdout?: string;
+  stderr?: string;
   tokens: string;
   ast: string;
   output: string;
   error: string | null;
+  parsed?: ParsedResponse;
 }
 interface ParsedTokenRow {
   type: string;
@@ -30,6 +61,7 @@ interface RTreePoint {
   selected: boolean;
   distance: number;
   rank: number | null;
+  row?: Record<string, ParsedCell>;
 }
 
 interface RTreeVizResponse {
@@ -241,6 +273,14 @@ const KEYWORDS = new Set([
   "INT",
   "CHAR",
   "FLOAT",
+  "EHASH",
+  "BTREE",
+  "RTREE",
+  "POINT",
+  "RADIUS",
+  "K",
+  "STRING",
+  "AUTOINCREMENTAL",
 ]);
 
 function highlightSQL(code: string): React.ReactNode[] {
@@ -296,10 +336,76 @@ const TYPE_COLORS: Record<string, string> = {
   LPAREN: "#94A3B8",
   RPAREN: "#94A3B8",
   END: "#475569",
+  SET: "#7C6FFF",
+  BETWEEN: "#7C6FFF",
+  AND: "#7C6FFF",
+  IN: "#7C6FFF",
+  POINT: "#7C6FFF",
+  RADIUS: "#7C6FFF",
+  K: "#7C6FFF",
+  INDEX: "#7C6FFF",
+  EHASH: "#7C6FFF",
+  BTREE: "#7C6FFF",
+  RTREE: "#7C6FFF",
+  INT: "#4ADE80",
+  FLOAT: "#4ADE80",
+  AUTOINCREMENTAL: "#4ADE80",
 };
 const tokenColor = (t: string) => TYPE_COLORS[t] ?? "#E2E8F0";
 
 type Tab = "output" | "tokens" | "ast";
+
+function renderParsedCell(value: ParsedCell): string {
+  if (value && typeof value === "object" && value.type === "POINT") {
+    return value.raw;
+  }
+
+  return String(value ?? "");
+}
+
+function ParsedResultTable({ table }: { table: ParsedTable }) {
+  return (
+    <div className="parsed-table-wrap">
+      <table className="parsed-table">
+        <thead>
+          <tr>
+            {table.columns.map((col) => (
+              <th key={col}>{col}</th>
+            ))}
+          </tr>
+        </thead>
+
+        <tbody>
+          {table.rows.map((row, i) => (
+            <tr key={i}>
+              {table.columns.map((col) => (
+                <td key={col}>{renderParsedCell(row[col])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="parsed-summary">
+        <span>
+          Filas mostradas: <b>{table.rows.length}</b>
+        </span>
+
+        {table.total != null && (
+          <span>
+            Total: <b>{table.total}</b>
+          </span>
+        )}
+
+        {table.executionTimeNs != null && (
+          <span>
+            Tiempo: <b>{table.executionTimeNs} ns</b>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SpatialPlane({ data }: { data: RTreeVizResponse }) {
   const width = 720;
@@ -490,12 +596,12 @@ function SpatialPlane({ data }: { data: RTreeVizResponse }) {
 export default function App() {
   const [query, setQuery] = useState(
     `CREATE TABLE hola FROM ("data.csv") (
-    id int primary key incremental,
-    dni int,
-    nombre char(10),
-    edad int,
-    genero char(10),
-    altura float
+    id INT PRIMARY KEY,
+    dni INT,
+    nombre STRING,
+    edad INT,
+    genero STRING,
+    altura FLOAT
 );`,
   );
   const [result, setResult] = useState<ParserResult | null>(null);
@@ -586,7 +692,7 @@ export default function App() {
       const data: ParserResult = await res.json();
       setResult(data);
 
-      const viz = parseRTreeVizFromOutput(data.output);
+      const viz = data.parsed?.rtreeViz ?? parseRTreeVizFromOutput(data.output);
       setRtreeViz(viz);
 
       if (data.error) setError(data.error);
@@ -685,6 +791,61 @@ export default function App() {
         .out-err  { color: #F87171; }
         .out-info { color: #38BDF8; }
         .out-time { color: #FB923C; }
+
+
+        .parsed-table-wrap {
+  background: #0B0F19;
+  border: 1px solid #1E293B;
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 360px;
+}
+
+.parsed-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.parsed-table th {
+  position: sticky;
+  top: 0;
+  background: #0F172A;
+  color: #7C6FFF;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1E293B;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.parsed-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #1E293B;
+  color: #CBD5E1;
+  white-space: nowrap;
+}
+
+.parsed-table tr:hover td {
+  background: #161D2E;
+}
+
+.parsed-summary {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-top: 1px solid #1E293B;
+  color: #64748B;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.parsed-summary b {
+  color: #E2E8F0;
+}
 
         /* token table */
         .token-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
@@ -1105,9 +1266,9 @@ export default function App() {
           </div>
 
           <div className="tab-pane">
-            {/* Resultado */}
+            {/* Tokens */}
             {activeTab === "output" &&
-              (!result?.output ? (
+              (!result ? (
                 <div className="empty">
                   <div className="empty-icon">◈</div>
                   <div className="empty-text">
@@ -1116,84 +1277,60 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className="output-wrap">
-                    <pre className="output-code">
-                      {result.output.split("\n").map((line, i) => {
-                        const l = line.toLowerCase();
-                        let cls = "";
-                        if (l.includes("error") || l.includes("no se pudo"))
-                          cls = "out-err";
-                        else if (
-                          l.includes("creada") ||
-                          l.includes("insertado") ||
-                          l.includes("eliminado") ||
-                          l.includes("exitoso")
-                        )
-                          cls = "out-ok";
-                        else if (
-                          l.includes("btree") ||
-                          l.includes("sequential") ||
-                          l.includes("scan") ||
-                          l.includes("search") ||
-                          l.includes("total")
-                        )
-                          cls = "out-info";
-                        else if (l.includes("tiempo") || l.includes(" ms"))
-                          cls = "out-time";
-                        return (
-                          <span key={i} className={cls}>
-                            {line}
-                            {"\n"}
-                          </span>
-                        );
-                      })}
-                    </pre>
-                  </div>
+                  {result.parsed?.table ? (
+                    <ParsedResultTable table={result.parsed.table} />
+                  ) : result.output ? (
+                    <div className="output-wrap">
+                      <pre className="output-code">
+                        {result.output.split("\n").map((line, i) => {
+                          const l = line.toLowerCase();
+                          let cls = "";
+
+                          if (l.includes("error") || l.includes("no se pudo"))
+                            cls = "out-err";
+                          else if (
+                            l.includes("creada") ||
+                            l.includes("insertado") ||
+                            l.includes("eliminado") ||
+                            l.includes("exitoso")
+                          )
+                            cls = "out-ok";
+                          else if (
+                            l.includes("btree") ||
+                            l.includes("rtree") ||
+                            l.includes("sequential") ||
+                            l.includes("scan") ||
+                            l.includes("search") ||
+                            l.includes("total")
+                          )
+                            cls = "out-info";
+                          else if (
+                            l.includes("tiempo") ||
+                            l.includes(" ns") ||
+                            l.includes(" ms")
+                          )
+                            cls = "out-time";
+
+                          return (
+                            <span key={i} className={cls}>
+                              {line}
+                              {"\n"}
+                            </span>
+                          );
+                        })}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div className="empty">
+                      <div className="empty-icon">◈</div>
+                      <div className="empty-text">
+                        No hay salida para mostrar
+                      </div>
+                    </div>
+                  )}
+
                   {rtreeViz && <SpatialPlane data={rtreeViz} />}
                 </>
-              ))}
-
-            {/* Tokens */}
-            {activeTab === "tokens" &&
-              (tokens.length === 0 ? (
-                <div className="empty">
-                  <div className="empty-icon">◈</div>
-                  <div className="empty-text">
-                    Ejecuta una query para ver los tokens
-                  </div>
-                </div>
-              ) : (
-                <table className="token-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Tipo</th>
-                      <th>Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tokens.map((tok, i) => (
-                      <tr key={i}>
-                        <td className="token-row-num">{i + 1}</td>
-                        <td>
-                          <span
-                            className="type-badge"
-                            style={{ color: tokenColor(tok.type) }}
-                          >
-                            {tok.type}
-                          </span>
-                        </td>
-                        <td className="token-value">
-                          {tok.value ? (
-                            <code>{tok.value}</code>
-                          ) : (
-                            <span style={{ color: "#334155" }}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               ))}
 
             {/* AST */}
